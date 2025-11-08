@@ -1,23 +1,54 @@
 import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
 
-import "~/app/globals.css";
-import { Providers } from "~/app/providers";
-import { APP_NAME, APP_DESCRIPTION } from "~/lib/constants";
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
 
-export const metadata: Metadata = {
-  title: APP_NAME,
-  description: APP_DESCRIPTION,
-};
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
-export default async function RootLayout({
+// export const metadata: Metadata = {};
+
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: "ROCK PAPER SCISSORS",
+    description: "Play Rock Paper Scissors on Base Sepolia!",
+    other: {
+      "fc:miniapp": JSON.stringify({
+        version: "next",
+        imageUrl: "https://your-app.com/embed-image",
+        button: {
+          title: `Launch ROCK PAPER SCISSORS`,
+          action: {
+            type: "launch_miniapp",
+            name: "ROCK PAPER SCISSORS",
+            url: "https://rock-paper-scissors-mini-app.vercel.app",
+            splashImageUrl:
+              "https://rock-paper-scissors-mini-app.vercel.app/globe.svg",
+            splashBackgroundColor: "#000000",
+          },
+        },
+      }),
+    },
+  };
+}
+
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
     <html lang="en">
-      <body>
-        <Providers>{children}</Providers>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        {children}
       </body>
     </html>
   );

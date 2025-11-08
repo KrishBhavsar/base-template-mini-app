@@ -453,40 +453,107 @@ const GamePlay: React.FC<{
   } | null>(null);
 
   // WebSocket event handler
+  // WebSocket event handler
   const handleEvent = async (event: any) => {
     console.log("Received event:", event);
-    if (event.type === "GameFinished" && event.args && event.args.length >= 7) {
+
+    setEventLog((prev) => [
+      ...prev,
+      `${event.type} at ${new Date().toLocaleTimeString()}`,
+    ]);
+
+    // Always reload game data when any event is received
+    await loadGameData();
+
+    // If game finished event, also try to extract result from event
+    if (event.type === "GameFinished") {
       try {
         const ethers = await import("ethers");
-        const [gameId, playerA, playerB, choiceA, choiceB, payoutA, payoutB] =
-          event.args;
+        const eventArgs = event.args || [];
 
-        // Safely convert to BigInt and handle any null/undefined values
-        const payoutABigInt = payoutA ? BigInt(payoutA.toString()) : BigInt(0);
-        const payoutBBigInt = payoutB ? BigInt(payoutB.toString()) : BigInt(0);
+        if (eventArgs.length >= 6) {
+          // Skip first element (gameId) and get the rest
+          const [
+            gameIdFromEvent,
+            playerA,
+            playerB,
+            choiceA,
+            choiceB,
+            payoutA,
+            payoutB,
+          ] = eventArgs;
 
-        setGameResult({
-          playerAChoice: Number(choiceA) || 0,
-          playerBChoice: Number(choiceB) || 0,
-          winner:
-            payoutABigInt > payoutBBigInt
-              ? playerA
-              : payoutBBigInt > payoutABigInt
-              ? playerB
-              : "tie",
-          payoutA: ethers.formatEther(payoutABigInt),
-          payoutB: ethers.formatEther(payoutBBigInt),
-        });
+          const payoutABigInt = payoutA
+            ? BigInt(payoutA.toString())
+            : BigInt(0);
+          const payoutBBigInt = payoutB
+            ? BigInt(payoutB.toString())
+            : BigInt(0);
+
+          const result = {
+            playerAChoice: Number(choiceA) || 0,
+            playerBChoice: Number(choiceB) || 0,
+            winner:
+              payoutABigInt > payoutBBigInt
+                ? playerA
+                : payoutBBigInt > payoutABigInt
+                ? playerB
+                : "tie",
+            payoutA: ethers.formatEther(payoutABigInt),
+            payoutB: ethers.formatEther(payoutBBigInt),
+          };
+
+          setGameResult(result);
+        }
       } catch (error) {
-        console.error("Error processing game result:", error);
-        // Set a default game result if there's an error
-        setGameResult({
-          playerAChoice: 0,
-          playerBChoice: 0,
-          winner: "error",
-          payoutA: "0",
-          payoutB: "0",
-        });
+        console.error("Error processing GameFinished event:", error);
+      }
+    }
+  };
+  // Use WebSocket hook
+  useWebSocketContract(gameId, async (event: any) => {
+    console.log("Received event:", event);
+    if (event.type === "GameFinished") {
+      try {
+        const ethers = await import("ethers");
+        const eventArgs = event.args || [];
+        console.log("GameFinished event args:", eventArgs);
+
+        if (eventArgs.length >= 7) {
+          const [gameId, playerA, playerB, choiceA, choiceB, payoutA, payoutB] =
+            eventArgs;
+
+          // Parse choices as numbers from Choice enum (1 = Split, 2 = Steal)
+          const choiceANum = Number(choiceA);
+          const choiceBNum = Number(choiceB);
+
+          // Determine winner based on the game logic
+          let winner;
+          if (choiceANum === 1 && choiceBNum === 1) {
+            winner = "tie"; // Both split
+          } else if (choiceANum === 2 && choiceBNum === 2) {
+            winner = "none"; // Both steal - goes to charity
+          } else if (choiceANum === 1 && choiceBNum === 2) {
+            winner = playerB; // A split, B steal
+          } else if (choiceANum === 2 && choiceBNum === 1) {
+            winner = playerA; // A steal, B split
+          }
+
+          // Handle payouts
+          const payoutABigInt = BigInt(payoutA?.toString() || "0");
+          const payoutBBigInt = BigInt(payoutB?.toString() || "0");
+
+          setGameResult({
+            playerAChoice: choiceANum,
+            playerBChoice: choiceBNum,
+            winner,
+            payoutA: ethers.formatEther(payoutABigInt),
+            payoutB: ethers.formatEther(payoutBBigInt),
+          });
+        }
+      } catch (error) {
+        console.error("Error processing GameFinished event:", error);
+        loadGameData();
       }
     }
     setEventLog((prev) => [
@@ -494,10 +561,7 @@ const GamePlay: React.FC<{
       `${event.type} at ${new Date().toLocaleTimeString()}`,
     ]);
     loadGameData();
-  };
-
-  // Use WebSocket hook
-  useWebSocketContract(gameId, handleEvent);
+  });
 
   useEffect(() => {
     loadGameData();
@@ -901,32 +965,53 @@ const GamePlay: React.FC<{
                 </div>
 
                 <div className="pt-4 border-t border-white/10">
-                  {gameResult.winner === "tie" ? (
-                    <p className="text-yellow-400 font-semibold">
-                      It's a tie! Pot split equally.
-                    </p>
-                  ) : gameResult.winner?.toLowerCase() ===
-                    address.toLowerCase() ? (
-                    <div className="text-green-400">
-                      <p className="font-bold text-lg mb-1">🎉 You Won!</p>
-                      {gameResult.playerAChoice === 1 &&
-                      gameResult.playerBChoice === 1 ? (
-                        <p className="text-sm">Both players chose to split.</p>
-                      ) : (
-                        <p className="text-sm">You outsmarted your opponent!</p>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-red-400">
-                      <p className="font-bold text-lg mb-1">You Lost</p>
-                      {gameResult.playerAChoice === 2 &&
-                      gameResult.playerBChoice === 2 ? (
-                        <p className="text-sm">Both players chose to steal.</p>
-                      ) : (
-                        <p className="text-sm">Your opponent outsmarted you!</p>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    if (gameResult.winner === "tie") {
+                      return (
+                        <div className="text-yellow-400">
+                          <p className="font-bold text-lg mb-1">It's a tie!</p>
+                          <p className="text-sm">
+                            Both players chose to split. The pot was divided
+                            equally.
+                          </p>
+                        </div>
+                      );
+                    } else if (gameResult.winner === "none") {
+                      return (
+                        <div className="text-red-400">
+                          <p className="font-bold text-lg mb-1">No Winners!</p>
+                          <p className="text-sm">
+                            Both players chose to steal. The pot goes to
+                            charity.
+                          </p>
+                        </div>
+                      );
+                    } else if (
+                      gameResult.winner?.toLowerCase() === address.toLowerCase()
+                    ) {
+                      return (
+                        <div className="text-green-400">
+                          <p className="font-bold text-lg mb-1">🎉 You Won!</p>
+                          <p className="text-sm">
+                            {gameResult.playerAChoice === 2
+                              ? "You stole while they split!"
+                              : "They stole but you split - good karma!"}
+                          </p>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div className="text-red-400">
+                          <p className="font-bold text-lg mb-1">You Lost</p>
+                          <p className="text-sm">
+                            {gameResult.playerAChoice === 1
+                              ? "You split but they stole!"
+                              : "They split and you stole - bad karma!"}
+                          </p>
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
               </div>
             ) : (
